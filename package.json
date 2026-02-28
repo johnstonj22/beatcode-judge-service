@@ -1,0 +1,13 @@
+{
+  "name": "beatcode-judge-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "judge-server.js",
+  "scripts": {
+    "start": "node judge-server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
