@@ -119,13 +119,13 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
     if (language === "javascript") {
       const file = path.join(tempDir, "main.js");
       await fs.writeFile(file, code, "utf8");
-      return runProcess("node", [file], { cwd: tempDir, stdin, timeoutMs });
+      return await runProcess("node", [file], { cwd: tempDir, stdin, timeoutMs });
     }
 
     if (language === "python") {
       const file = path.join(tempDir, "main.py");
       await fs.writeFile(file, code, "utf8");
-      return runProcess("python3", [file], { cwd: tempDir, stdin, timeoutMs });
+      return await runProcess("python3", [file], { cwd: tempDir, stdin, timeoutMs });
     }
 
     if (language === "cpp") {
