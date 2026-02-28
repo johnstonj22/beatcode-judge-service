@@ -14,8 +14,8 @@ RUN npm install --omit=dev
 COPY judge-server.js ./
 
 ENV NODE_ENV=production
-ENV PORT=8080
 
+# Not strictly required by Railway, but fine to include
 EXPOSE 8080
 
 CMD ["node", "judge-server.js"]

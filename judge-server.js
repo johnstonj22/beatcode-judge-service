@@ -5,7 +5,10 @@ const os = require("os");
 const { spawn } = require("child_process");
 
 const app = express();
+
+// Let Railway inject PORT
 const PORT = Number(process.env.PORT || 8080);
+
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
@@ -13,6 +16,17 @@ const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 60
 
 app.use(express.json({ limit: "1mb" }));
 
+// ---- Basic root endpoint (helps some platform health checks) ----
+app.get("/", (_req, res) => {
+  res.status(200).send("ok");
+});
+
+// ---- Health endpoint ----
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
+
+// ---- Simple in-memory rate limiting ----
 const rateBuckets = new Map();
 
 function rateLimit(req, res, next) {
@@ -33,6 +47,8 @@ function rateLimit(req, res, next) {
   return next();
 }
 
+app.use(rateLimit);
+
 function clampTimeout(timeoutMs) {
   const parsed = Number(timeoutMs);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TIMEOUT_MS;
@@ -46,7 +62,8 @@ function normalizeOutput(text) {
 }
 
 function runProcess(command, args, options = {}) {
-  const { cwd, stdin = "", timeoutMs = 3000 } = options;
+  const { cwd, stdin = "", timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const child = spawn(command, args, { cwd });
@@ -117,16 +134,22 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
 
       await fs.writeFile(src, code, "utf8");
 
-      const compile = await runProcess("g++", [src, "-O2", "-std=c++17", "-o", bin], {
-        cwd: tempDir,
-        timeoutMs,
-      });
+      const compile = await runProcess(
+        "g++",
+        [src, "-O2", "-std=c++17", "-o", bin],
+        { cwd: tempDir, timeoutMs }
+      );
 
       if (compile.exitCode !== 0) {
         return { ...compile, phase: "compile" };
       }
 
-      const runResult = await runProcess(bin, [], { cwd: tempDir, stdin, timeoutMs });
+      const runResult = await runProcess(bin, [], {
+        cwd: tempDir,
+        stdin,
+        timeoutMs,
+      });
+
       return { ...runResult, phase: "run" };
     }
 
@@ -140,12 +163,6 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
-
-app.get("/health", (_req, res) => {
-  res.status(200).json({ ok: true });
-});
-
-app.use(rateLimit);
 
 app.post("/run", async (req, res) => {
   const { language, code, stdin = "", timeoutMs } = req.body || {};
@@ -162,9 +179,12 @@ app.post("/run", async (req, res) => {
       stdin,
       timeoutMs: effectiveTimeoutMs,
     });
+
     return res.status(200).json(result);
   } catch (err) {
-    return res.status(500).json({ error: "Runner failed", details: String(err.message || err) });
+    return res
+      .status(500)
+      .json({ error: "Runner failed", details: String(err.message || err) });
   }
 });
 
@@ -173,7 +193,9 @@ app.post("/judge", async (req, res) => {
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
 
   if (!language || !code || !Array.isArray(testCases)) {
-    return res.status(400).json({ error: "language, code, and testCases[] are required" });
+    return res
+      .status(400)
+      .json({ error: "language, code, and testCases[] are required" });
   }
 
   try {
@@ -188,6 +210,7 @@ app.post("/judge", async (req, res) => {
         stdin: input,
         timeoutMs: effectiveTimeoutMs,
       });
+
       if (result.exitCode !== 0) {
         return res.status(200).json({
           passed: false,
@@ -214,10 +237,13 @@ app.post("/judge", async (req, res) => {
 
     return res.status(200).json({ passed: true });
   } catch (err) {
-    return res.status(500).json({ error: "Judge failed", details: String(err.message || err) });
+    return res
+      .status(500)
+      .json({ error: "Judge failed", details: String(err.message || err) });
   }
 });
 
-app.listen(PORT, () => {
+// Important: bind to 0.0.0.0 for cloud environments
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Judge service listening on port ${PORT}`);
 });
