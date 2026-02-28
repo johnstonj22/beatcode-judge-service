@@ -14,8 +14,8 @@ RUN npm install --omit=dev
 COPY judge-server.js ./
 
 ENV NODE_ENV=production
-ENV PORT=5050
+ENV PORT=8080
 
-EXPOSE 5050
+EXPOSE 8080
 
 CMD ["node", "judge-server.js"]

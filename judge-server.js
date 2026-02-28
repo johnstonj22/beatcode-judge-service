@@ -5,7 +5,7 @@ const os = require("os");
 const { spawn } = require("child_process");
 
 const app = express();
-const PORT = Number(process.env.PORT || 5050);
+const PORT = Number(process.env.PORT || 8080);
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
