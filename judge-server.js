@@ -6,6 +6,7 @@ const { spawn } = require("child_process");
 const app = express();
 const PORT = Number(process.env.PORT || 5050);
 const EXEC_ROOT = process.env.JUDGE_EXEC_ROOT || process.cwd();
+const DEBUG_JUDGE = process.env.JUDGE_DEBUG === "1" || process.env.JUDGE_DEBUG === "true";
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
@@ -14,6 +15,11 @@ const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 60
 app.use(express.json({ limit: "1mb" }));
 
 const rateBuckets = new Map();
+
+function debug(...items) {
+  if (!DEBUG_JUDGE) return;
+  console.log("[judge-debug]", ...items);
+}
 
 function rateLimit(req, res, next) {
   const now = Date.now();
@@ -290,8 +296,12 @@ function runProcess(command, args, options = {}) {
 }
 
 async function executeSubmission({ language, code, stdin, timeoutMs }) {
+  const reqId = Math.random().toString(36).slice(2, 10);
+  debug("executeSubmission start", { reqId, language, timeoutMs });
+
   await fs.mkdir(path.join(EXEC_ROOT, ".judge-tmp"), { recursive: true }).catch(() => {});
   const tempDir = await fs.mkdtemp(path.join(EXEC_ROOT, ".judge-tmp", "beatcode-judge-"));
+  debug("tempDir created", { reqId, tempDir });
 
   try {
     if (language === "javascript") {
@@ -300,6 +310,7 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
       try {
         await fs.access(file);
       } catch {
+        debug("writeCheck failed", { reqId, file });
         return {
           stdout: "",
           stderr: `Failed to write JavaScript source file to ${file}`,
@@ -307,7 +318,10 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
           timeMs: 0,
         };
       }
-      return runProcess("node", [file], { cwd: tempDir, stdin, timeoutMs });
+      debug("runCommand", { reqId, command: "node", file, cwd: tempDir });
+      const result = await runProcess("node", [file], { cwd: tempDir, stdin, timeoutMs });
+      debug("runComplete", { reqId, exitCode: result.exitCode, timeMs: result.timeMs });
+      return result;
     }
 
     if (language === "python") {
@@ -316,6 +330,7 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
       try {
         await fs.access(file);
       } catch {
+        debug("writeCheck failed", { reqId, file });
         return {
           stdout: "",
           stderr: `Failed to write Python source file to ${file}`,
@@ -323,7 +338,10 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
           timeMs: 0,
         };
       }
-      return runProcess("python3", [file], { cwd: tempDir, stdin, timeoutMs });
+      debug("runCommand", { reqId, command: "python3", file, cwd: tempDir });
+      const result = await runProcess("python3", [file], { cwd: tempDir, stdin, timeoutMs });
+      debug("runComplete", { reqId, exitCode: result.exitCode, timeMs: result.timeMs });
+      return result;
     }
 
     if (language === "cpp") {
@@ -336,12 +354,14 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
         cwd: tempDir,
         timeoutMs,
       });
+      debug("compileComplete", { reqId, exitCode: compile.exitCode, timeMs: compile.timeMs });
 
       if (compile.exitCode !== 0) {
         return { ...compile, phase: "compile" };
       }
 
       const runResult = await runProcess(bin, [], { cwd: tempDir, stdin, timeoutMs });
+      debug("runComplete", { reqId, command: bin, exitCode: runResult.exitCode, timeMs: runResult.timeMs });
       return { ...runResult, phase: "run" };
     }
 
@@ -352,6 +372,7 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
       timeMs: 0,
     };
   } finally {
+    debug("cleanupTempDir", { reqId, tempDir });
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
