@@ -1,11 +1,11 @@
 const express = require("express");
 const fs = require("fs/promises");
 const path = require("path");
-const os = require("os");
 const { spawn } = require("child_process");
 
 const app = express();
 const PORT = Number(process.env.PORT || 5050);
+const EXEC_ROOT = process.env.JUDGE_EXEC_ROOT || process.cwd();
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
@@ -290,18 +290,39 @@ function runProcess(command, args, options = {}) {
 }
 
 async function executeSubmission({ language, code, stdin, timeoutMs }) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "beatcode-judge-"));
+  await fs.mkdir(path.join(EXEC_ROOT, ".judge-tmp"), { recursive: true }).catch(() => {});
+  const tempDir = await fs.mkdtemp(path.join(EXEC_ROOT, ".judge-tmp", "beatcode-judge-"));
 
   try {
     if (language === "javascript") {
       const file = path.join(tempDir, "main.js");
       await fs.writeFile(file, code, "utf8");
+      try {
+        await fs.access(file);
+      } catch {
+        return {
+          stdout: "",
+          stderr: `Failed to write JavaScript source file to ${file}`,
+          exitCode: 2,
+          timeMs: 0,
+        };
+      }
       return runProcess("node", [file], { cwd: tempDir, stdin, timeoutMs });
     }
 
     if (language === "python") {
       const file = path.join(tempDir, "main.py");
       await fs.writeFile(file, code, "utf8");
+      try {
+        await fs.access(file);
+      } catch {
+        return {
+          stdout: "",
+          stderr: `Failed to write Python source file to ${file}`,
+          exitCode: 2,
+          timeMs: 0,
+        };
+      }
       return runProcess("python3", [file], { cwd: tempDir, stdin, timeoutMs });
     }
 
