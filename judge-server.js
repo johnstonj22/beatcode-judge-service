@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const fs = require("fs/promises");
 const path = require("path");
 const { spawn } = require("child_process");
@@ -110,13 +110,42 @@ function preprocessPythonCodeForJudge(code, functionName) {
   return noSelf.trim();
 }
 
-function buildWrappedPython(code, functionName, args) {
-  const safeCode = code.includes("from typing import") ? preprocessPythonCodeForJudge(code, functionName) : `from typing import *\n${preprocessPythonCodeForJudge(code, functionName)}`;
-  return `${safeCode}\n\nimport json as _json\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_result = ${functionName}(*_args)\nprint(_json.dumps(_result))\n`;
+function shouldUseLinkedListHarness(code, functionName, argTypes) {
+  const fn = String(functionName || "");
+  const source = String(code || "");
+  const hintedTypes = Array.isArray(argTypes) ? argTypes.join(" ") : "";
+  return /\bListNode\b/.test(source) || /\bListNode\b/.test(hintedTypes) || fn === "addTwoNumbers";
 }
 
-function buildWrappedJavascript(code, functionName, args) {
-  return `${code}\n\n(async () => {\n  try {\n    const _result = await Promise.resolve(${functionName}(...${JSON.stringify(args || [])}));\n    process.stdout.write(JSON.stringify(_result) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
+function buildWrappedPython(code, functionName, args, argTypes) {
+  const safeCode = code.includes("from typing import")
+    ? preprocessPythonCodeForJudge(code, functionName)
+    : `from typing import *\n${preprocessPythonCodeForJudge(code, functionName)}`;
+  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+
+  if (!useLinkedList) {
+    return `${safeCode}\n\nimport json as _json\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_result = ${functionName}(*_args)\nprint(_json.dumps(_result))\n`;
+  }
+
+  const listNodePrelude = /\bclass\s+ListNode\b/.test(safeCode)
+    ? ""
+    : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
+
+  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\nif hasattr(_result, "val") and hasattr(_result, "next"):\n    print(_json.dumps(__list_to_array(_result)))\nelse:\n    print(_json.dumps(_result))\n`;
+}
+
+function buildWrappedJavascript(code, functionName, args, argTypes) {
+  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+
+  if (!useLinkedList) {
+    return `${code}\n\n(async () => {\n  try {\n    const _result = await Promise.resolve(${functionName}(...${JSON.stringify(args || [])}));\n    process.stdout.write(JSON.stringify(_result) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
+  }
+
+  const listNodePrelude = /\bclass\s+ListNode\b/.test(String(code || ""))
+    ? ""
+    : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
+
+  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = _result && typeof _result === "object" && "val" in _result && "next" in _result\n      ? __listToArray(_result)\n      : _result;\n    process.stdout.write(JSON.stringify(_final) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
 }
 
 function inferCppArgType(value, depth = 0) {
@@ -209,11 +238,19 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
   const normalized = String(functionName || "").trim();
   const safeArgs = Array.isArray(args) ? args : [];
   const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
+  const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(String(code || ""));
+  const needsListNodeStruct = usesListNode && !/\b(struct|class)\s+ListNode\b/.test(String(code || ""));
   const declaredArgs = safeArgs.map((arg, idx) => {
     const hinted = explicitArgTypes[idx];
-    const type = typeof hinted === "string" && hinted.trim()
+    const normalizedHint = typeof hinted === "string" && hinted.trim()
       ? normalizeCppDeclarationType(hinted)
-      : inferCppArgType(arg);
+      : "";
+
+    if (usesListNode && /\bListNode\s*\*/.test(normalizedHint) && Array.isArray(arg)) {
+      return `ListNode* __arg${idx} = __make_list(vector<int>${serializeCppLiteral(arg)});`;
+    }
+
+    const type = normalizedHint || inferCppArgType(arg);
     return `${type} __arg${idx} = ${serializeCppLiteral(arg)};`;
   });
   const callSignatureArgs = safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
@@ -222,10 +259,38 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     ? `Solution __solution; return __solution.${normalized}(${callSignatureArgs});`
     : `return ${normalized}(${callSignatureArgs});`;
 
+  const listNodeHelpers = usesListNode ? [
+    "",
+    needsListNodeStruct ? "struct ListNode { int val; ListNode* next; ListNode(): val(0), next(nullptr) {} ListNode(int x): val(x), next(nullptr) {} ListNode(int x, ListNode* n): val(x), next(n) {} };" : "",
+    "ListNode* __make_list(const vector<int>& values) {",
+    "  ListNode dummy(0);",
+    "  ListNode* cur = &dummy;",
+    "  for (int v : values) {",
+    "    cur->next = new ListNode(v);",
+    "    cur = cur->next;",
+    "  }",
+    "  return dummy.next;",
+    "}",
+    "string __to_json(ListNode* node) {",
+    "  string out = \"[\";",
+    "  bool first = true;",
+    "  int guard = 0;",
+    "  while (node != nullptr && guard < 10000) {",
+    "    if (!first) out += \",\";",
+    "    first = false;",
+    "    out += to_string(node->val);",
+    "    node = node->next;",
+    "    guard += 1;",
+    "  }",
+    "  return out + \"]\";",
+    "}",
+  ] : [];
+
   return [
     "#include <bits/stdc++.h>",
     "using namespace std;",
     "",
+    ...listNodeHelpers,
     safeCode,
     "",
     "template <typename T>",
@@ -451,9 +516,9 @@ app.post("/debug-wrap", (req, res) => {
 
   let wrappedCode = "";
   if (language === "javascript") {
-    wrappedCode = buildWrappedJavascript(code, functionName, args);
+    wrappedCode = buildWrappedJavascript(code, functionName, args, argTypes);
   } else if (language === "python") {
-    wrappedCode = buildWrappedPython(code, functionName, args);
+    wrappedCode = buildWrappedPython(code, functionName, args, argTypes);
   } else {
     wrappedCode = buildWrappedCpp(code, functionName, args, argTypes);
   }
@@ -480,9 +545,9 @@ app.post("/run", async (req, res) => {
       let runnableCode = "";
 
       if (language === "javascript") {
-        runnableCode = buildWrappedJavascript(code, functionName, args);
+        runnableCode = buildWrappedJavascript(code, functionName, args, argTypes);
       } else if (language === "python") {
-        runnableCode = buildWrappedPython(code, functionName, args);
+        runnableCode = buildWrappedPython(code, functionName, args, argTypes);
       } else if (language === "cpp") {
         runnableCode = buildWrappedCpp(code, functionName, args, argTypes);
       }
@@ -521,8 +586,8 @@ app.post("/judge", async (req, res) => {
         const wrappedCode = language === "cpp"
           ? buildWrappedCpp(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes)
           : language === "python"
-          ? buildWrappedPython(code, functionName, test.args)
-          : buildWrappedJavascript(code, functionName, test.args);
+          ? buildWrappedPython(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes)
+          : buildWrappedJavascript(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes);
 
         const result = await executeSubmission({
           language,
@@ -594,6 +659,8 @@ app.post("/judge", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Judge service listening on port ${PORT}`);
 });
+
+
 
 
 
