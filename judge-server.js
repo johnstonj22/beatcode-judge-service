@@ -7,6 +7,8 @@ const app = express();
 const PORT = Number(process.env.PORT || 5050);
 const EXEC_ROOT = process.env.JUDGE_EXEC_ROOT || process.cwd();
 const DEBUG_JUDGE = process.env.JUDGE_DEBUG === "1" || process.env.JUDGE_DEBUG === "true";
+const DEBUG_WRAP_ENABLED = process.env.JUDGE_DEBUG_WRAP === "1" || process.env.JUDGE_DEBUG_WRAP === "true";
+const DEBUG_WRAP_TOKEN = process.env.DEBUG_WRAP_TOKEN || "";
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
@@ -19,6 +21,22 @@ const rateBuckets = new Map();
 function debug(...items) {
   if (!DEBUG_JUDGE) return;
   console.log("[judge-debug]", ...items);
+}
+function authorizeDebugWrap(req, res) {
+  if (!DEBUG_WRAP_ENABLED) {
+    res.status(404).json({ error: "Not found" });
+    return false;
+  }
+
+  if (DEBUG_WRAP_TOKEN) {
+    const token = req.header("x-debug-token") || "";
+    if (token !== DEBUG_WRAP_TOKEN) {
+      res.status(401).json({ error: "Unauthorized" });
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function rateLimit(req, res, next) {
@@ -177,9 +195,9 @@ function buildWrappedCpp(code, functionName, args) {
 
   const callSignatureArgs = safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
   const isClassBased = /\bclass\s+Solution\s*:\s*public\b/.test(code) || /\bclass\s+Solution\s*{/.test(code) || /\bclass\s+Solution\b/.test(code);
-  const callExpr = isClassBased
-    ? `Solution __solution; __solution.${normalized}(${callSignatureArgs});`
-    : `${normalized}(${callSignatureArgs});`;
+  const callLambdaBody = isClassBased
+    ? `Solution __solution; return __solution.${normalized}(${callSignatureArgs});`
+    : `return ${normalized}(${callSignatureArgs});`;
 
   return [
     "#include <bits/stdc++.h>",
@@ -228,7 +246,7 @@ function buildWrappedCpp(code, functionName, args) {
     "int main() {",
     "  try {",
     "    " + declaredArgs.join("\n    "),
-    "    " + (normalized ? `auto __call = [&](){ return ${callExpr}; };` : ""),
+    "    " + (normalized ? `auto __call = [&](){ ${callLambdaBody} };` : ""),
     "    if constexpr (std::is_same_v<decltype(__call()), void>) {",
     "      __call();",
     "      std::cout << \"null\\n\";",
@@ -326,7 +344,13 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
 
     if (language === "python") {
       const file = path.join(tempDir, "main.py");
-      await fs.writeFile(file, code, "utf8");
+      const pythonPrelude = /from __future__ import annotations/.test(code)
+        ? ""
+        : "from __future__ import annotations\n";
+      const pythonCode = /from typing import/.test(code)
+        ? `${pythonPrelude}${code}`
+        : `${pythonPrelude}from typing import *\n${code}`;
+      await fs.writeFile(file, pythonCode, "utf8");
       try {
         await fs.access(file);
       } catch {
@@ -382,6 +406,43 @@ app.get("/health", (_req, res) => {
 });
 
 app.use(rateLimit);
+
+app.post("/debug-wrap", (req, res) => {
+  if (!authorizeDebugWrap(req, res)) return;
+
+  const { language, code, functionName, args } = req.body || {};
+
+  if (!language || !code) {
+    return res.status(400).json({ error: "language and code are required" });
+  }
+
+  if (!["javascript", "python", "cpp"].includes(language)) {
+    return res.status(400).json({ error: "Invalid language. Must be javascript, python, or cpp" });
+  }
+
+  if (typeof functionName !== "string" || !functionName.trim() || !Array.isArray(args)) {
+    return res.status(400).json({
+      error: "functionName and args[] are required for debug wrap",
+    });
+  }
+
+  let wrappedCode = "";
+  if (language === "javascript") {
+    wrappedCode = buildWrappedJavascript(code, functionName, args);
+  } else if (language === "python") {
+    wrappedCode = buildWrappedPython(code, functionName, args);
+  } else {
+    wrappedCode = buildWrappedCpp(code, functionName, args);
+  }
+
+  return res.status(200).json({
+    ok: true,
+    language,
+    functionName,
+    argCount: args.length,
+    wrappedCode,
+  });
+});
 
 app.post("/run", async (req, res) => {
   const { language, code, stdin = "", timeoutMs, functionName, args } = req.body || {};
@@ -510,3 +571,8 @@ app.post("/judge", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Judge service listening on port ${PORT}`);
 });
+
+
+
+
+
