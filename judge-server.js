@@ -123,20 +123,26 @@ function inferCppArgType(value, depth = 0) {
   if (depth > 8) return "string";
 
   if (Array.isArray(value)) {
-    if (value.length === 0) return "vector<long long>";
+    if (value.length === 0) return "vector<int>";
 
     const samples = value.filter((item) => item !== null && item !== undefined);
-    const firstType = samples.length === 0 ? "long long" : inferCppArgType(samples[0], depth + 1);
+    const firstType = samples.length === 0 ? "int" : inferCppArgType(samples[0], depth + 1);
     const normalizedInnerType = samples.reduce((acc, item) => mergeCppType(acc, inferCppArgType(item, depth + 1)), firstType);
-    const innerType = normalizedInnerType;
 
-    return `vector<${innerType}>`;
+    return `vector<${normalizedInnerType}>`;
   }
 
-  if (value === null || value === undefined) return "long long";
+  if (value === null || value === undefined) return "int";
 
   if (typeof value === "boolean") return "bool";
-  if (typeof value === "number") return Number.isInteger(value) ? "long long" : "double";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "double";
+    if (!Number.isInteger(value)) return "double";
+
+    // Prefer int for LeetCode-style signatures; promote only when needed.
+    if (value >= -2147483648 && value <= 2147483647) return "int";
+    return "long long";
+  }
   if (typeof value === "string") return "string";
 
   if (typeof value === "object") {
@@ -145,16 +151,19 @@ function inferCppArgType(value, depth = 0) {
 
   return "string";
 }
-
 function isNumericCppType(type) {
-  return type === "long long" || type === "double";
+  return type === "int" || type === "long long" || type === "double";
 }
 
 function mergeCppType(existingType, nextType) {
   if (existingType === nextType) return nextType;
   if (existingType === undefined) return nextType;
 
-  if (isNumericCppType(existingType) && isNumericCppType(nextType)) return "double";
+  if (isNumericCppType(existingType) && isNumericCppType(nextType)) {
+    if (existingType === "double" || nextType === "double") return "double";
+    if (existingType === "long long" || nextType === "long long") return "long long";
+    return "int";
+  }
 
   return "string";
 }
@@ -184,15 +193,29 @@ function serializeCppLiteral(value) {
   return JSON.stringify(value);
 }
 
-function buildWrappedCpp(code, functionName, args) {
+
+function normalizeCppDeclarationType(rawType) {
+  const normalized = String(rawType || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "int";
+
+  return normalized
+    .replace(/^const\s+/, "")
+    .replace(/\s*&&\s*$/, "")
+    .replace(/\s*&\s*$/, "")
+    .trim();
+}
+function buildWrappedCpp(code, functionName, args, argTypes) {
   const safeCode = code;
   const normalized = String(functionName || "").trim();
   const safeArgs = Array.isArray(args) ? args : [];
+  const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
   const declaredArgs = safeArgs.map((arg, idx) => {
-    const type = inferCppArgType(arg);
+    const hinted = explicitArgTypes[idx];
+    const type = typeof hinted === "string" && hinted.trim()
+      ? normalizeCppDeclarationType(hinted)
+      : inferCppArgType(arg);
     return `${type} __arg${idx} = ${serializeCppLiteral(arg)};`;
   });
-
   const callSignatureArgs = safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
   const isClassBased = /\bclass\s+Solution\s*:\s*public\b/.test(code) || /\bclass\s+Solution\s*{/.test(code) || /\bclass\s+Solution\b/.test(code);
   const callLambdaBody = isClassBased
@@ -410,7 +433,7 @@ app.use(rateLimit);
 app.post("/debug-wrap", (req, res) => {
   if (!authorizeDebugWrap(req, res)) return;
 
-  const { language, code, functionName, args } = req.body || {};
+  const { language, code, functionName, args, argTypes } = req.body || {};
 
   if (!language || !code) {
     return res.status(400).json({ error: "language and code are required" });
@@ -432,7 +455,7 @@ app.post("/debug-wrap", (req, res) => {
   } else if (language === "python") {
     wrappedCode = buildWrappedPython(code, functionName, args);
   } else {
-    wrappedCode = buildWrappedCpp(code, functionName, args);
+    wrappedCode = buildWrappedCpp(code, functionName, args, argTypes);
   }
 
   return res.status(200).json({
@@ -445,7 +468,7 @@ app.post("/debug-wrap", (req, res) => {
 });
 
 app.post("/run", async (req, res) => {
-  const { language, code, stdin = "", timeoutMs, functionName, args } = req.body || {};
+  const { language, code, stdin = "", timeoutMs, functionName, args, argTypes } = req.body || {};
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
 
   if (!language || !code) {
@@ -461,7 +484,7 @@ app.post("/run", async (req, res) => {
       } else if (language === "python") {
         runnableCode = buildWrappedPython(code, functionName, args);
       } else if (language === "cpp") {
-        runnableCode = buildWrappedCpp(code, functionName, args);
+        runnableCode = buildWrappedCpp(code, functionName, args, argTypes);
       }
 
       const result = await executeSubmission({ language, code: runnableCode, stdin: "", timeoutMs: effectiveTimeoutMs });
@@ -481,7 +504,7 @@ app.post("/run", async (req, res) => {
 });
 
 app.post("/judge", async (req, res) => {
-  const { language, code, functionName, testCases = [], timeoutMs } = req.body || {};
+  const { language, code, functionName, testCases = [], timeoutMs, argTypes } = req.body || {};
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
 
   if (!language || !code || !Array.isArray(testCases)) {
@@ -496,7 +519,7 @@ app.post("/judge", async (req, res) => {
 
       if (typeof functionName === "string" && functionName.trim() && Array.isArray(test.args)) {
         const wrappedCode = language === "cpp"
-          ? buildWrappedCpp(code, functionName, test.args)
+          ? buildWrappedCpp(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes)
           : language === "python"
           ? buildWrappedPython(code, functionName, test.args)
           : buildWrappedJavascript(code, functionName, test.args);
@@ -571,6 +594,10 @@ app.post("/judge", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Judge service listening on port ${PORT}`);
 });
+
+
+
+
 
 
 
