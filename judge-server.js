@@ -131,7 +131,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
     ? ""
     : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
 
-  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\nif hasattr(_result, "val") and hasattr(_result, "next"):\n    print(_json.dumps(__list_to_array(_result)))\nelse:\n    print(_json.dumps(_result))\n`;
+  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\nif _result is None:\n    print(_json.dumps([]))\nelif hasattr(_result, "val") and hasattr(_result, "next"):\n    print(_json.dumps(__list_to_array(_result)))\nelse:\n    print(_json.dumps(_result))\n`;
 }
 
 function buildWrappedJavascript(code, functionName, args, argTypes) {
@@ -145,7 +145,7 @@ function buildWrappedJavascript(code, functionName, args, argTypes) {
     ? ""
     : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
 
-  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = _result && typeof _result === "object" && "val" in _result && "next" in _result\n      ? __listToArray(_result)\n      : _result;\n    process.stdout.write(JSON.stringify(_final) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
+  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = _result == null\n      ? []\n      : _result && typeof _result === \"object\" && \"val\" in _result && \"next\" in _result\n      ? __listToArray(_result)\n      : _result;\n    process.stdout.write(JSON.stringify(_final) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
 }
 
 function inferCppArgType(value, depth = 0) {
@@ -272,6 +272,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "  return dummy.next;",
     "}",
     "string __to_json(ListNode* node) {",
+    "  if (node == nullptr) return \"[]\";",
     "  string out = \"[\";",
     "  bool first = true;",
     "  int guard = 0;",
