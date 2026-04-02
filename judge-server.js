@@ -233,13 +233,21 @@ function normalizeCppDeclarationType(rawType) {
     .replace(/\s*&\s*$/, "")
     .trim();
 }
+
+function stripCppComments(source) {
+  return String(source || "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+}
+
 function buildWrappedCpp(code, functionName, args, argTypes) {
   const safeCode = code;
+  const uncommentedCode = stripCppComments(code);
   const normalized = String(functionName || "").trim();
   const safeArgs = Array.isArray(args) ? args : [];
   const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
-  const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(String(code || ""));
-  const needsListNodeStruct = usesListNode && !/\b(struct|class)\s+ListNode\b/.test(String(code || ""));
+  const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(uncommentedCode);
+  const needsListNodeStruct = usesListNode && !/\b(struct|class)\s+ListNode\b/.test(uncommentedCode);
   const declaredArgs = safeArgs.map((arg, idx) => {
     const hinted = explicitArgTypes[idx];
     const normalizedHint = typeof hinted === "string" && hinted.trim()
