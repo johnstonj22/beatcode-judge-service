@@ -124,28 +124,28 @@ function buildWrappedPython(code, functionName, args, argTypes) {
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
 
   if (!useLinkedList) {
-    return `${safeCode}\n\nimport json as _json\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_result = ${functionName}(*_args)\nprint(_json.dumps(_result))\n`;
+    return `${safeCode}\n\nimport json as _json\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_result = ${functionName}(*_args)\nprint(_json.dumps({"__judge":{"result":_result,"mutatedArgs":_args}}))\n`;
   }
 
   const listNodePrelude = /\bclass\s+ListNode\b/.test(safeCode)
     ? ""
     : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
 
-  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\nif _result is None:\n    print(_json.dumps([]))\nelif hasattr(_result, "val") and hasattr(_result, "next"):\n    print(_json.dumps(__list_to_array(_result)))\nelse:\n    print(_json.dumps(_result))\n`;
+  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, "val") and hasattr(v, "next"):\n        return __list_to_array(v)\n    return v\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
 }
 
 function buildWrappedJavascript(code, functionName, args, argTypes) {
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
 
   if (!useLinkedList) {
-    return `${code}\n\n(async () => {\n  try {\n    const _result = await Promise.resolve(${functionName}(...${JSON.stringify(args || [])}));\n    process.stdout.write(JSON.stringify(_result) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
+    return `${code}\n\n(async () => {\n  try {\n    const _args = JSON.parse(JSON.stringify(${JSON.stringify(args || [])}));\n    const _result = await Promise.resolve(${functionName}(..._args));\n    process.stdout.write(JSON.stringify({ __judge: { result: _result, mutatedArgs: _args } }) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
   }
 
   const listNodePrelude = /\bclass\s+ListNode\b/.test(String(code || ""))
     ? ""
     : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
 
-  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = _result == null\n      ? []\n      : _result && typeof _result === \"object\" && \"val\" in _result && \"next\" in _result\n      ? __listToArray(_result)\n      : _result;\n    process.stdout.write(JSON.stringify(_final) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
+  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
 }
 
 function inferCppArgType(value, depth = 0) {
@@ -339,6 +339,14 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "  }",
     "  return out + \"]\";",
     "}",
+    "string __to_json(const vector<string>& value) {",
+    "  string out = \"[\";",
+    "  for (size_t i = 0; i < value.size(); i += 1) {",
+    "    if (i) out += \",\";",
+    "    out += value[i];",
+    "  }",
+    "  return out + \"]\";",
+    "}",
     "",
     "int main() {",
     "  try {",
@@ -346,10 +354,16 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "    " + (normalized ? `auto __call = [&](){ ${callLambdaBody} };` : ""),
     "    if constexpr (std::is_same_v<decltype(__call()), void>) {",
     "      __call();",
-    "      std::cout << \"null\\n\";",
+    "      vector<string> __mut;",
+    ...safeArgs.map((_, idx) => `      __mut.push_back(__to_json(__arg${idx}));`),
+    "      string __mutated_json = __to_json(__mut);",
+    "      std::cout << \"{\\\"__judge\\\":{\\\"result\\\":null,\\\"mutatedArgs\\\":\" << __mutated_json << \"}}\\n\";",
     "    } else {",
     "      auto __result = __call();",
-    "      std::cout << __to_json(__result) << \"\\n\";",
+    "      vector<string> __mut;",
+    ...safeArgs.map((_, idx) => `      __mut.push_back(__to_json(__arg${idx}));`),
+    "      string __mutated_json = __to_json(__mut);",
+    "      std::cout << \"{\\\"__judge\\\":{\\\"result\\\":\" << __to_json(__result) << \",\\\"mutatedArgs\\\":\" << __mutated_json << \"}}\\n\";",
     "    }",
     "  } catch (const exception& e) {",
     "    std::cerr << e.what() << \"\\n\";",
