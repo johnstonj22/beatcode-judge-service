@@ -13,6 +13,7 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 60);
+const JUDGE_BUILD_TAG = process.env.JUDGE_BUILD_TAG || "2026-04-10-intersection-v4";
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -664,7 +665,7 @@ async function executeSubmission({ language, code, stdin, timeoutMs }) {
 }
 
 app.get("/health", (_req, res) => {
-  res.status(200).json({ ok: true });
+  res.status(200).json({ ok: true, buildTag: JUDGE_BUILD_TAG });
 });
 
 app.use(rateLimit);
