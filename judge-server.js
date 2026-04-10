@@ -121,6 +121,10 @@ function shouldUseLinkedListHarness(code, functionName, argTypes) {
   return /\bListNode\b/.test(source) || /\bListNode\b/.test(hintedTypes) || fn === "addTwoNumbers";
 }
 
+function stripPythonLineComments(source) {
+  return String(source || "").replace(/^[ \t]*#.*$/gm, "");
+}
+
 function shouldUseTreeHarness(code, functionName, argTypes) {
   const fn = String(functionName || "");
   const source = String(code || "");
@@ -159,7 +163,8 @@ function buildWrappedPython(code, functionName, args, argTypes) {
   }
 
   if (useLinkedList) {
-    const listNodePrelude = /\bclass\s+ListNode\b/.test(safeCode)
+    const uncommentedPy = stripPythonLineComments(safeCode);
+    const listNodePrelude = /\bclass\s+ListNode\b/.test(uncommentedPy)
       ? ""
       : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
 
