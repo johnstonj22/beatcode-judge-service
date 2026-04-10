@@ -147,6 +147,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
   const argsJsonLiteral = JSON.stringify(JSON.stringify(args || []));
   const fnLower = String(functionName || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
   const disableTreeArgAdaptation = fnLower.includes("sortedarraytobst");
+  const isHasCycle = fnLower === "hascycle";
   const safeCode = code.includes("from typing import")
     ? preprocessPythonCodeForJudge(code, functionName)
     : `from typing import *\n${preprocessPythonCodeForJudge(code, functionName)}`;
@@ -162,7 +163,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
       ? ""
       : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
 
-    return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, "val") and hasattr(v, "next"):\n        return __list_to_array(v)\n    return v\n\n_args = _json.loads(${argsJsonLiteral})\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
+    return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __make_cycle(head, pos):\n    if head is None or pos is None or pos < 0:\n        return head\n    idx = 0\n    cur = head\n    target = None\n    tail = None\n    seen = 0\n    while cur is not None and seen < 100000:\n        if idx == pos:\n            target = cur\n        tail = cur\n        cur = cur.next\n        idx += 1\n        seen += 1\n    if tail is not None and target is not None:\n        tail.next = target\n    return head\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, "val") and hasattr(v, "next"):\n        return __list_to_array(v)\n    return v\n\n_args = _json.loads(${argsJsonLiteral})\nif ${isHasCycle ? "True" : "False"}:\n    _raw_head = _args[0] if len(_args) > 0 and isinstance(_args[0], list) else []\n    _pos = _args[1] if len(_args) > 1 else -1\n    _head = __build_list(_raw_head)\n    _head = __make_cycle(_head, int(_pos) if isinstance(_pos, (int, float, str)) and str(_pos).lstrip('-').isdigit() else -1)\n    _adapted = [_head]\nelse:\n    _adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = _args if ${isHasCycle ? "True" : "False"} else [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
   }
 
   const treeNodePrelude = /\bclass\s+TreeNode\b/.test(safeCode)
@@ -175,6 +176,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
 function buildWrappedJavascript(code, functionName, args, argTypes) {
   const fnLower = String(functionName || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
   const disableTreeArgAdaptation = fnLower.includes("sortedarraytobst");
+  const isHasCycle = fnLower === "hascycle";
   const uncommentedJs = stripJavascriptComments(code);
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
   const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
@@ -188,7 +190,7 @@ function buildWrappedJavascript(code, functionName, args, argTypes) {
       ? ""
       : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
 
-    return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
+    return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __makeCycle(head, pos) {\n  if (!head || !Number.isInteger(pos) || pos < 0) return head;\n  let idx = 0;\n  let cur = head;\n  let target = null;\n  let tail = null;\n  let seen = 0;\n  while (cur && seen < 100000) {\n    if (idx === pos) target = cur;\n    tail = cur;\n    cur = cur.next;\n    idx += 1;\n    seen += 1;\n  }\n  if (tail && target) tail.next = target;\n  return head;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    let _args;\n    if (${isHasCycle ? "true" : "false"}) {\n      const _headRaw = Array.isArray(_rawArgs[0]) ? _rawArgs[0] : [];\n      const _pos = Number.isFinite(Number(_rawArgs[1])) ? Number(_rawArgs[1]) : -1;\n      const _head = __makeCycle(__buildList(_headRaw), _pos);\n      _args = [_head];\n    } else {\n      _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    }\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = ${isHasCycle ? "JSON.parse(JSON.stringify(_rawArgs))" : "_args.map((a) => __normalizeValue(a))"};\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
   }
 
   const treeNodePrelude = /\b(function|class)\s+TreeNode\b/.test(uncommentedJs)
@@ -305,6 +307,8 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
   const safeCode = code;
   const uncommentedCode = stripCppComments(code);
   const normalized = String(functionName || "").trim();
+  const normalizedLower = normalized.toLowerCase();
+  const isHasCycle = normalizedLower === "hascycle";
   const safeArgs = Array.isArray(args) ? args : [];
   const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
   const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(uncommentedCode);
@@ -329,7 +333,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     const type = normalizedHint || inferCppArgType(arg);
     return `${type} __arg${idx} = ${serializeCppLiteral(arg)};`;
   });
-  const callSignatureArgs = safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
+  const callSignatureArgs = isHasCycle ? "__arg0" : safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
   const isClassBased = /\bclass\s+Solution\s*:\s*public\b/.test(code) || /\bclass\s+Solution\s*{/.test(code) || /\bclass\s+Solution\b/.test(code);
   const callLambdaBody = isClassBased
     ? `Solution __solution; return __solution.${normalized}(${callSignatureArgs});`
@@ -360,6 +364,22 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "    guard += 1;",
     "  }",
     "  return out + \"]\";",
+    "}",
+    "void __make_cycle(ListNode* head, int pos) {",
+    "  if (head == nullptr || pos < 0) return;",
+    "  int idx = 0;",
+    "  ListNode* cur = head;",
+    "  ListNode* target = nullptr;",
+    "  ListNode* tail = nullptr;",
+    "  int guard = 0;",
+    "  while (cur != nullptr && guard < 100000) {",
+    "    if (idx == pos) target = cur;",
+    "    tail = cur;",
+    "    cur = cur->next;",
+    "    idx += 1;",
+    "    guard += 1;",
+    "  }",
+    "  if (tail != nullptr && target != nullptr) tail->next = target;",
     "}",
   ] : [];
 
@@ -482,6 +502,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "int main() {",
     "  try {",
     "    " + declaredArgs.join("\n    "),
+    "    " + (isHasCycle ? "__make_cycle(__arg0, (int)__arg1);" : ""),
     "    " + (normalized ? `auto __call = [&](){ ${callLambdaBody} };` : ""),
     "    string __result_json = __run_and_result_json(__call);",
     "    vector<string> __mut;",
