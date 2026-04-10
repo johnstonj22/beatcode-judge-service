@@ -117,35 +117,70 @@ function shouldUseLinkedListHarness(code, functionName, argTypes) {
   return /\bListNode\b/.test(source) || /\bListNode\b/.test(hintedTypes) || fn === "addTwoNumbers";
 }
 
+function shouldUseTreeHarness(code, functionName, argTypes) {
+  const fn = String(functionName || "");
+  const source = String(code || "");
+  const hintedTypes = Array.isArray(argTypes) ? argTypes.join(" ") : "";
+  const knownTreeFns = new Set([
+    "inorderTraversal",
+    "preorderTraversal",
+    "postorderTraversal",
+    "maxDepth",
+    "isSameTree",
+    "isSymmetric",
+    "levelOrder",
+  ]);
+  return /\bTreeNode\b/.test(source) || /\bTreeNode\b/.test(hintedTypes) || knownTreeFns.has(fn);
+}
+
 function buildWrappedPython(code, functionName, args, argTypes) {
+  const argsJsonLiteral = JSON.stringify(JSON.stringify(args || []));
   const safeCode = code.includes("from typing import")
     ? preprocessPythonCodeForJudge(code, functionName)
     : `from typing import *\n${preprocessPythonCodeForJudge(code, functionName)}`;
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+  const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
 
-  if (!useLinkedList) {
-    return `${safeCode}\n\nimport json as _json\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_result = ${functionName}(*_args)\nprint(_json.dumps({"__judge":{"result":_result,"mutatedArgs":_args}}))\n`;
+  if (!useLinkedList && !useTree) {
+    return `${safeCode}\n\nimport json as _json\n_args = _json.loads(${argsJsonLiteral})\n_result = ${functionName}(*_args)\nprint(_json.dumps({"__judge":{"result":_result,"mutatedArgs":_args}}))\n`;
   }
 
-  const listNodePrelude = /\bclass\s+ListNode\b/.test(safeCode)
-    ? ""
-    : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
+  if (useLinkedList) {
+    const listNodePrelude = /\bclass\s+ListNode\b/.test(safeCode)
+      ? ""
+      : `class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n`;
 
-  return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, "val") and hasattr(v, "next"):\n        return __list_to_array(v)\n    return v\n\n_args = _json.loads(_json.dumps(${JSON.stringify(args || [])}))\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
+    return `${listNodePrelude}${safeCode}\n\nimport json as _json\n\ndef __build_list(values):\n    dummy = ListNode(0)\n    cur = dummy\n    for v in values:\n        cur.next = ListNode(v)\n        cur = cur.next\n    return dummy.next\n\ndef __list_to_array(node):\n    out = []\n    seen = 0\n    while node is not None and seen < 10000:\n        out.append(node.val)\n        node = node.next\n        seen += 1\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, "val") and hasattr(v, "next"):\n        return __list_to_array(v)\n    return v\n\n_args = _json.loads(${argsJsonLiteral})\n_adapted = [__build_list(a) if isinstance(a, list) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
+  }
+
+  const treeNodePrelude = /\bclass\s+TreeNode\b/.test(safeCode)
+    ? ""
+    : `class TreeNode:\n    def __init__(self, val=0, left=None, right=None):\n        self.val = val\n        self.left = left\n        self.right = right\n\n`;
+
+  return `${treeNodePrelude}${safeCode}\n\nimport json as _json\nfrom collections import deque\n\ndef __looks_like_tree_array(v):\n    if not isinstance(v, list):\n        return False\n    if len(v) == 0:\n        return True\n    for x in v:\n        if isinstance(x, (list, dict)):\n            return False\n    return True\n\ndef __build_tree(values):\n    if not isinstance(values, list) or len(values) == 0:\n        return None\n    if values[0] is None:\n        return None\n    nodes = [None if v is None else TreeNode(v) for v in values]\n    kids = nodes[::-1]\n    root = kids.pop()\n    for node in nodes:\n        if node is not None:\n            if kids:\n                node.left = kids.pop()\n            if kids:\n                node.right = kids.pop()\n    return root\n\ndef __tree_to_array(root):\n    if root is None:\n        return []\n    out = []\n    q = deque([root])\n    seen = 0\n    while q and seen < 20000:\n        node = q.popleft()\n        if node is None:\n            out.append(None)\n        else:\n            out.append(node.val)\n            q.append(node.left)\n            q.append(node.right)\n        seen += 1\n    while out and out[-1] is None:\n        out.pop()\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, 'val') and hasattr(v, 'left') and hasattr(v, 'right'):\n        return __tree_to_array(v)\n    return v\n\n_args = _json.loads(${argsJsonLiteral})\n_adapted = [__build_tree(a) if __looks_like_tree_array(a) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
 }
 
 function buildWrappedJavascript(code, functionName, args, argTypes) {
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+  const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
 
-  if (!useLinkedList) {
+  if (!useLinkedList && !useTree) {
     return `${code}\n\n(async () => {\n  try {\n    const _args = JSON.parse(JSON.stringify(${JSON.stringify(args || [])}));\n    const _result = await Promise.resolve(${functionName}(..._args));\n    process.stdout.write(JSON.stringify({ __judge: { result: _result, mutatedArgs: _args } }) + "\\n");\n  } catch (err) {\n    process.stderr.write(String(err) + "\\n");\n    process.exit(1);\n  }\n})();\n`;
   }
 
-  const listNodePrelude = /\bclass\s+ListNode\b/.test(String(code || ""))
-    ? ""
-    : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
+  if (useLinkedList) {
+    const listNodePrelude = /\bclass\s+ListNode\b/.test(String(code || ""))
+      ? ""
+      : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
 
-  return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
+    return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
+  }
+
+  const treeNodePrelude = /\b(function|class)\s+TreeNode\b/.test(String(code || ""))
+    ? ""
+    : `function TreeNode(val, left, right) {\n  this.val = (val === undefined ? 0 : val);\n  this.left = (left === undefined ? null : left);\n  this.right = (right === undefined ? null : right);\n}\n\n`;
+
+  return `${treeNodePrelude}${code}\n\nfunction __looksLikeTreeArray(v) {\n  if (!Array.isArray(v)) return false;\n  if (v.length === 0) return true;\n  return v.every((x) => !Array.isArray(x) && (x === null || typeof x !== 'object'));\n}\n\nfunction __buildTree(values) {\n  if (!Array.isArray(values) || values.length === 0 || values[0] == null) return null;\n  const nodes = values.map((v) => (v == null ? null : new TreeNode(v)));\n  let i = 1;\n  for (let j = 0; j < nodes.length && i < nodes.length; j += 1) {\n    if (nodes[j] != null) {\n      nodes[j].left = i < nodes.length ? nodes[i++] : null;\n      nodes[j].right = i < nodes.length ? nodes[i++] : null;\n    }\n  }\n  return nodes[0];\n}\n\nfunction __treeToArray(root) {\n  if (!root) return [];\n  const out = [];\n  const q = [root];\n  let head = 0;\n  let seen = 0;\n  while (head < q.length && seen < 20000) {\n    const node = q[head++];\n    if (node == null) {\n      out.push(null);\n    } else {\n      out.push(node.val);\n      q.push(node.left ?? null);\n      q.push(node.right ?? null);\n    }\n    seen += 1;\n  }\n  while (out.length > 0 && out[out.length - 1] == null) out.pop();\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"left\" in v && \"right\" in v) return __treeToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => __looksLikeTreeArray(a) ? __buildTree(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
 }
 
 function inferCppArgType(value, depth = 0) {
@@ -222,6 +257,17 @@ function serializeCppLiteral(value) {
   return JSON.stringify(value);
 }
 
+function serializeCppTreeTokens(values) {
+  const list = Array.isArray(values) ? values : [];
+  const rendered = list
+    .map((v) => {
+      if (v === null || v === undefined) return "\"null\"";
+      return JSON.stringify(String(v));
+    })
+    .join(", ");
+  return `{${rendered}}`;
+}
+
 
 function normalizeCppDeclarationType(rawType) {
   const normalized = String(rawType || "").replace(/\s+/g, " ").trim();
@@ -247,7 +293,11 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
   const safeArgs = Array.isArray(args) ? args : [];
   const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
   const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(uncommentedCode);
+  const usesTreeNode = !usesListNode && (
+    explicitArgTypes.some((t) => /\bTreeNode\s*\*/.test(String(t || ""))) || /\bTreeNode\b/.test(uncommentedCode)
+  );
   const needsListNodeStruct = usesListNode && !/\b(struct|class)\s+ListNode\b/.test(uncommentedCode);
+  const needsTreeNodeStruct = usesTreeNode && !/\b(struct|class)\s+TreeNode\b/.test(uncommentedCode);
   const declaredArgs = safeArgs.map((arg, idx) => {
     const hinted = explicitArgTypes[idx];
     const normalizedHint = typeof hinted === "string" && hinted.trim()
@@ -256,6 +306,9 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
 
     if (usesListNode && /\bListNode\s*\*/.test(normalizedHint) && Array.isArray(arg)) {
       return `ListNode* __arg${idx} = __make_list(vector<int>${serializeCppLiteral(arg)});`;
+    }
+    if (usesTreeNode && /\bTreeNode\s*\*/.test(normalizedHint) && Array.isArray(arg)) {
+      return `TreeNode* __arg${idx} = __make_tree(vector<string>${serializeCppTreeTokens(arg)});`;
     }
 
     const type = normalizedHint || inferCppArgType(arg);
@@ -295,11 +348,57 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "}",
   ] : [];
 
+  const treeNodeHelpers = usesTreeNode ? [
+    "",
+    needsTreeNodeStruct ? "struct TreeNode { int val; TreeNode* left; TreeNode* right; TreeNode(): val(0), left(nullptr), right(nullptr) {} TreeNode(int x): val(x), left(nullptr), right(nullptr) {} TreeNode(int x, TreeNode* l, TreeNode* r): val(x), left(l), right(r) {} };" : "",
+    "TreeNode* __make_tree(const vector<string>& values) {",
+    "  if (values.empty()) return nullptr;",
+    "  if (values[0] == \"null\") return nullptr;",
+    "  vector<TreeNode*> nodes(values.size(), nullptr);",
+    "  for (size_t i = 0; i < values.size(); i += 1) {",
+    "    if (values[i] != \"null\") nodes[i] = new TreeNode(stoi(values[i]));",
+    "  }",
+    "  for (size_t i = 0; i < values.size(); i += 1) {",
+    "    if (!nodes[i]) continue;",
+    "    size_t li = 2 * i + 1, ri = 2 * i + 2;",
+    "    if (li < values.size()) nodes[i]->left = nodes[li];",
+    "    if (ri < values.size()) nodes[i]->right = nodes[ri];",
+    "  }",
+    "  return nodes[0];",
+    "}",
+    "string __to_json(TreeNode* root) {",
+    "  if (root == nullptr) return \"[]\";",
+    "  vector<string> out;",
+    "  queue<TreeNode*> q;",
+    "  q.push(root);",
+    "  int seen = 0;",
+    "  while (!q.empty() && seen < 20000) {",
+    "    TreeNode* node = q.front(); q.pop();",
+    "    if (node == nullptr) {",
+    "      out.push_back(\"null\");",
+    "    } else {",
+    "      out.push_back(to_string(node->val));",
+    "      q.push(node->left);",
+    "      q.push(node->right);",
+    "    }",
+    "    seen += 1;",
+    "  }",
+    "  while (!out.empty() && out.back() == \"null\") out.pop_back();",
+    "  string s = \"[\";",
+    "  for (size_t i = 0; i < out.size(); i += 1) {",
+    "    if (i) s += \",\";",
+    "    s += out[i];",
+    "  }",
+    "  return s + \"]\";",
+    "}",
+  ] : [];
+
   return [
     "#include <bits/stdc++.h>",
     "using namespace std;",
     "",
     ...listNodeHelpers,
+    ...treeNodeHelpers,
     safeCode,
     "",
     "template <typename T>",
