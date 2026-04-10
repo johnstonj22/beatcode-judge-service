@@ -352,7 +352,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "  try {",
     "    " + declaredArgs.join("\n    "),
     "    " + (normalized ? `auto __call = [&](){ ${callLambdaBody} };` : ""),
-    "    if constexpr (std::is_same_v<decltype(__call()), void>) {",
+    "    if constexpr (std::is_same_v<std::invoke_result_t<decltype(__call)>, void>) {",
     "      __call();",
     "      vector<string> __mut;",
     ...safeArgs.map((_, idx) => `      __mut.push_back(__to_json(__arg${idx}));`),
