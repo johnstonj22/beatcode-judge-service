@@ -106,8 +106,12 @@ function preprocessPythonCodeForJudge(code, functionName) {
     new RegExp(`def\\s+${functionName}\\s*\\(\\s*(?:self|cls)\\s*(?:,\\s*)?`),
     `def ${functionName}(`
   );
+  const recursionFixed = noSelf.replace(
+    new RegExp(`\\b(?:self|cls)\\.${functionName}\\s*\\(`, "g"),
+    `${functionName}(`
+  );
 
-  return noSelf.trim();
+  return recursionFixed.trim();
 }
 
 function shouldUseLinkedListHarness(code, functionName, argTypes) {
@@ -131,6 +135,12 @@ function shouldUseTreeHarness(code, functionName, argTypes) {
     "levelOrder",
   ]);
   return /\bTreeNode\b/.test(source) || /\bTreeNode\b/.test(hintedTypes) || knownTreeFns.has(fn);
+}
+
+function stripJavascriptComments(source) {
+  return String(source || "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
 }
 
 function buildWrappedPython(code, functionName, args, argTypes) {
@@ -161,6 +171,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
 }
 
 function buildWrappedJavascript(code, functionName, args, argTypes) {
+  const uncommentedJs = stripJavascriptComments(code);
   const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
   const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
 
@@ -169,14 +180,14 @@ function buildWrappedJavascript(code, functionName, args, argTypes) {
   }
 
   if (useLinkedList) {
-    const listNodePrelude = /\bclass\s+ListNode\b/.test(String(code || ""))
+    const listNodePrelude = /\bclass\s+ListNode\b/.test(uncommentedJs)
       ? ""
       : `class ListNode {\n  constructor(val = 0, next = null) {\n    this.val = val;\n    this.next = next;\n  }\n}\n\n`;
 
     return `${listNodePrelude}${code}\n\nfunction __buildList(values) {\n  const dummy = new ListNode(0);\n  let cur = dummy;\n  for (const v of values) {\n    cur.next = new ListNode(v);\n    cur = cur.next;\n  }\n  return dummy.next;\n}\n\nfunction __listToArray(node) {\n  const out = [];\n  let seen = 0;\n  while (node && seen < 10000) {\n    out.push(node.val);\n    node = node.next;\n    seen += 1;\n  }\n  return out;\n}\n\nfunction __normalizeValue(v) {\n  if (v == null) return [];\n  if (v && typeof v === \"object\" && \"val\" in v && \"next\" in v) return __listToArray(v);\n  return v;\n}\n\n(async () => {\n  try {\n    const _rawArgs = ${JSON.stringify(args || [])};\n    const _args = _rawArgs.map((a) => Array.isArray(a) ? __buildList(a) : a);\n    const _result = await Promise.resolve(${functionName}(..._args));\n    const _final = __normalizeValue(_result);\n    const _mutatedArgs = _args.map((a) => __normalizeValue(a));\n    process.stdout.write(JSON.stringify({ __judge: { result: _final, mutatedArgs: _mutatedArgs } }) + \"\\n\");\n  } catch (err) {\n    process.stderr.write(String(err) + \"\\n\");\n    process.exit(1);\n  }\n})();\n`;
   }
 
-  const treeNodePrelude = /\b(function|class)\s+TreeNode\b/.test(String(code || ""))
+  const treeNodePrelude = /\b(function|class)\s+TreeNode\b/.test(uncommentedJs)
     ? ""
     : `function TreeNode(val, left, right) {\n  this.val = (val === undefined ? 0 : val);\n  this.left = (left === undefined ? null : left);\n  this.right = (right === undefined ? null : right);\n}\n\n`;
 
