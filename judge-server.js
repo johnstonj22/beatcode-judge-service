@@ -533,7 +533,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "  string out = \"[\";",
     "  for (size_t i = 0; i < value.size(); i += 1) {",
     "    if (i) out += \",\";",
-    "    out += value[i];",
+    "    out += __to_json(value[i]);",
     "  }",
     "  return out + \"]\";",
     "}",
