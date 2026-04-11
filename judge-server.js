@@ -317,6 +317,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
   const normalized = String(functionName || "").trim();
   const normalizedLower = normalized.toLowerCase();
   const isHasCycle = normalizedLower === "hascycle";
+  const isGetIntersectionNode = normalizedLower === "getintersectionnode";
   const safeArgs = Array.isArray(args) ? args : [];
   const explicitArgTypes = Array.isArray(argTypes) ? argTypes : [];
   const usesListNode = explicitArgTypes.some((t) => /\bListNode\s*\*/.test(String(t || ""))) || /\bListNode\b/.test(uncommentedCode);
@@ -341,7 +342,11 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     const type = normalizedHint || inferCppArgType(arg);
     return `${type} __arg${idx} = ${serializeCppLiteral(arg)};`;
   });
-  const callSignatureArgs = isHasCycle ? "__arg0" : safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
+  const callSignatureArgs = isHasCycle
+    ? "__arg0"
+    : isGetIntersectionNode
+    ? "__headA, __headB"
+    : safeArgs.map((_, idx) => `__arg${idx}`).join(", ");
   const isClassBased = /\bclass\s+Solution\s*:\s*public\b/.test(code) || /\bclass\s+Solution\s*{/.test(code) || /\bclass\s+Solution\b/.test(code);
   const callLambdaBody = isClassBased
     ? `Solution __solution; return __solution.${normalized}(${callSignatureArgs});`
@@ -388,6 +393,39 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "    guard += 1;",
     "  }",
     "  if (tail != nullptr && target != nullptr) tail->next = target;",
+    "}",
+    "pair<ListNode*, ListNode*> __make_intersection(int intersectVal, const vector<int>& listA, const vector<int>& listB, int skipA, int skipB) {",
+    "  ListNode* headA = __make_list(listA);",
+    "  ListNode* headB = __make_list(listB);",
+    "  if (intersectVal == 0) return {headA, headB};",
+    "  if (skipA < 0 || skipB < 0) return {headA, headB};",
+    "  vector<ListNode*> nodesA;",
+    "  ListNode* curA = headA;",
+    "  int guardA = 0;",
+    "  while (curA != nullptr && guardA < 100000) {",
+    "    nodesA.push_back(curA);",
+    "    curA = curA->next;",
+    "    guardA += 1;",
+    "  }",
+    "  if (skipA >= (int)nodesA.size()) return {headA, headB};",
+    "  if (skipB > (int)listB.size()) return {headA, headB};",
+    "  if (listA[skipA] != intersectVal) return {headA, headB};",
+    "  if (skipB < (int)listB.size() && listB[skipB] != intersectVal) return {headA, headB};",
+    "  ListNode* shared = nodesA[skipA];",
+    "  if (skipB == 0) {",
+    "    headB = shared;",
+    "  } else {",
+    "    ListNode* tailB = headB;",
+    "    int idx = 1;",
+    "    int guardB = 0;",
+    "    while (tailB != nullptr && idx < skipB && guardB < 100000) {",
+    "      tailB = tailB->next;",
+    "      idx += 1;",
+    "      guardB += 1;",
+    "    }",
+    "    if (tailB != nullptr) tailB->next = shared;",
+    "  }",
+    "  return {headA, headB};",
     "}",
   ] : [];
 
@@ -511,6 +549,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     "  try {",
     "    " + declaredArgs.join("\n    "),
     "    " + (isHasCycle ? "__make_cycle(__arg0, (int)__arg1);" : ""),
+    "    " + (isGetIntersectionNode ? "auto __heads = __make_intersection((int)__arg0, __arg1, __arg2, (int)__arg3, (int)__arg4); ListNode* __headA = __heads.first; ListNode* __headB = __heads.second;" : ""),
     "    " + (normalized ? `auto __call = [&](){ ${callLambdaBody} };` : ""),
     "    string __result_json = __run_and_result_json(__call);",
     "    vector<string> __mut;",
