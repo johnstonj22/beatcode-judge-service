@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 2000);
 const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 60);
-const JUDGE_BUILD_TAG = process.env.JUDGE_BUILD_TAG || "2026-04-10-intersection-v4";
+const JUDGE_BUILD_TAG = process.env.JUDGE_BUILD_TAG || "2026-04-10-intersection-v5";
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -728,7 +728,7 @@ app.post("/run", async (req, res) => {
       }
 
       const result = await executeSubmission({ language, code: runnableCode, stdin: "", timeoutMs: effectiveTimeoutMs });
-      return res.status(200).json(result);
+      return res.status(200).json({ ...result, buildTag: JUDGE_BUILD_TAG });
     }
 
     const result = await executeSubmission({
@@ -737,7 +737,7 @@ app.post("/run", async (req, res) => {
       stdin,
       timeoutMs: effectiveTimeoutMs,
     });
-    return res.status(200).json(result);
+    return res.status(200).json({ ...result, buildTag: JUDGE_BUILD_TAG });
   } catch (err) {
     return res.status(500).json({ error: "Runner failed", details: String(err.message || err) });
   }
