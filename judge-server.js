@@ -14,6 +14,7 @@ const MAX_TIMEOUT_MS = Number(process.env.MAX_TIMEOUT_MS || 5000);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 60);
 const JUDGE_BUILD_TAG = process.env.JUDGE_BUILD_TAG || "2026-04-10-intersection-v5";
+const FORCE_LINKED_LIST_BEATCODE_IDS = new Set([31]);
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -115,11 +116,31 @@ function preprocessPythonCodeForJudge(code, functionName) {
   return recursionFixed.trim();
 }
 
-function shouldUseLinkedListHarness(code, functionName, argTypes) {
+function shouldUseLinkedListHarness(code, functionName, argTypes, beatcodeId) {
   const fn = String(functionName || "");
+  const fnLower = fn.trim().toLowerCase();
   const source = String(code || "");
   const hintedTypes = Array.isArray(argTypes) ? argTypes.join(" ") : "";
-  return /\bListNode\b/.test(source) || /\bListNode\b/.test(hintedTypes) || fn === "addTwoNumbers";
+  const normalizedBeatcodeId = Number(beatcodeId);
+  const forceByBeatcodeId =
+    Number.isFinite(normalizedBeatcodeId) && FORCE_LINKED_LIST_BEATCODE_IDS.has(normalizedBeatcodeId);
+  const forceByFunctionName = new Set([
+    "addtwonumbers",
+    "hascycle",
+    "getintersectionnode",
+    "mergetwolists",
+    "reverselist",
+    "removenthfromend",
+    "middleoflinkedlist",
+    "deleteduplicates",
+  ]).has(fnLower);
+  return (
+    forceByBeatcodeId ||
+    forceByFunctionName ||
+    /\bListNode\b/.test(source) ||
+    /\bListNode\b/.test(hintedTypes) ||
+    fn === "addTwoNumbers"
+  );
 }
 
 function stripPythonLineComments(source) {
@@ -148,7 +169,7 @@ function stripJavascriptComments(source) {
     .replace(/\/\/.*$/gm, "");
 }
 
-function buildWrappedPython(code, functionName, args, argTypes) {
+function buildWrappedPython(code, functionName, args, argTypes, beatcodeId) {
   const argsJsonLiteral = JSON.stringify(JSON.stringify(args || []));
   const fnLower = String(functionName || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
   const disableTreeArgAdaptation = fnLower.includes("sortedarraytobst");
@@ -157,7 +178,7 @@ function buildWrappedPython(code, functionName, args, argTypes) {
   const safeCode = code.includes("from typing import")
     ? preprocessPythonCodeForJudge(code, functionName)
     : `from typing import *\n${preprocessPythonCodeForJudge(code, functionName)}`;
-  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes, beatcodeId);
   const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
 
   if (!useLinkedList && !useTree) {
@@ -180,13 +201,13 @@ function buildWrappedPython(code, functionName, args, argTypes) {
   return `${treeNodePrelude}${safeCode}\n\nimport json as _json\nfrom collections import deque\n\ndef __looks_like_tree_array(v):\n    if not isinstance(v, list):\n        return False\n    if len(v) == 0:\n        return True\n    for x in v:\n        if isinstance(x, (list, dict)):\n            return False\n    return True\n\ndef __build_tree(values):\n    if not isinstance(values, list) or len(values) == 0:\n        return None\n    if values[0] is None:\n        return None\n    nodes = [None if v is None else TreeNode(v) for v in values]\n    kids = nodes[::-1]\n    root = kids.pop()\n    for node in nodes:\n        if node is not None:\n            if kids:\n                node.left = kids.pop()\n            if kids:\n                node.right = kids.pop()\n    return root\n\ndef __tree_to_array(root):\n    if root is None:\n        return []\n    out = []\n    q = deque([root])\n    seen = 0\n    while q and seen < 20000:\n        node = q.popleft()\n        if node is None:\n            out.append(None)\n        else:\n            out.append(node.val)\n            q.append(node.left)\n            q.append(node.right)\n        seen += 1\n    while out and out[-1] is None:\n        out.pop()\n    return out\n\ndef __normalize_value(v):\n    if v is None:\n        return []\n    if hasattr(v, 'val') and hasattr(v, 'left') and hasattr(v, 'right'):\n        return __tree_to_array(v)\n    return v\n\n_args = _json.loads(${argsJsonLiteral})\n_adapted = _args if ${disableTreeArgAdaptation ? "True" : "False"} else [__build_tree(a) if __looks_like_tree_array(a) else a for a in _args]\n_result = ${functionName}(*_adapted)\n_norm_result = __normalize_value(_result)\n_norm_args = [__normalize_value(a) for a in _adapted]\nprint(_json.dumps({"__judge":{"result":_norm_result,"mutatedArgs":_norm_args}}))\n`;
 }
 
-function buildWrappedJavascript(code, functionName, args, argTypes) {
+function buildWrappedJavascript(code, functionName, args, argTypes, beatcodeId) {
   const fnLower = String(functionName || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
   const disableTreeArgAdaptation = fnLower.includes("sortedarraytobst");
   const isHasCycle = fnLower === "hascycle";
   const uncommentedJs = stripJavascriptComments(code);
   const isGetIntersectionNode = fnLower === "getintersectionnode" || /\bgetIntersectionNode\b/.test(uncommentedJs);
-  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes);
+  const useLinkedList = shouldUseLinkedListHarness(code, functionName, argTypes, beatcodeId);
   const useTree = !useLinkedList && shouldUseTreeHarness(code, functionName, argTypes);
 
   if (!useLinkedList && !useTree) {
@@ -715,7 +736,7 @@ app.use(rateLimit);
 app.post("/debug-wrap", (req, res) => {
   if (!authorizeDebugWrap(req, res)) return;
 
-  const { language, code, functionName, args, argTypes } = req.body || {};
+  const { language, code, functionName, args, argTypes, beatcodeId } = req.body || {};
 
   if (!language || !code) {
     return res.status(400).json({ error: "language and code are required" });
@@ -733,9 +754,9 @@ app.post("/debug-wrap", (req, res) => {
 
   let wrappedCode = "";
   if (language === "javascript") {
-    wrappedCode = buildWrappedJavascript(code, functionName, args, argTypes);
+    wrappedCode = buildWrappedJavascript(code, functionName, args, argTypes, beatcodeId);
   } else if (language === "python") {
-    wrappedCode = buildWrappedPython(code, functionName, args, argTypes);
+    wrappedCode = buildWrappedPython(code, functionName, args, argTypes, beatcodeId);
   } else {
     wrappedCode = buildWrappedCpp(code, functionName, args, argTypes);
   }
@@ -750,7 +771,7 @@ app.post("/debug-wrap", (req, res) => {
 });
 
 app.post("/run", async (req, res) => {
-  const { language, code, stdin = "", timeoutMs, functionName, args, argTypes } = req.body || {};
+  const { language, code, stdin = "", timeoutMs, functionName, args, argTypes, beatcodeId } = req.body || {};
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
 
   if (!language || !code) {
@@ -762,9 +783,9 @@ app.post("/run", async (req, res) => {
       let runnableCode = "";
 
       if (language === "javascript") {
-        runnableCode = buildWrappedJavascript(code, functionName, args, argTypes);
+        runnableCode = buildWrappedJavascript(code, functionName, args, argTypes, beatcodeId);
       } else if (language === "python") {
-        runnableCode = buildWrappedPython(code, functionName, args, argTypes);
+        runnableCode = buildWrappedPython(code, functionName, args, argTypes, beatcodeId);
       } else if (language === "cpp") {
         runnableCode = buildWrappedCpp(code, functionName, args, argTypes);
       }
@@ -786,7 +807,7 @@ app.post("/run", async (req, res) => {
 });
 
 app.post("/judge", async (req, res) => {
-  const { language, code, functionName, testCases = [], timeoutMs, argTypes } = req.body || {};
+  const { language, code, functionName, testCases = [], timeoutMs, argTypes, beatcodeId } = req.body || {};
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
 
   if (!language || !code || !Array.isArray(testCases)) {
@@ -800,11 +821,12 @@ app.post("/judge", async (req, res) => {
       const expected = normalizeOutput(expectedOutput);
 
       if (typeof functionName === "string" && functionName.trim() && Array.isArray(test.args)) {
+        const perTestBeatcodeId = test.beatcodeId ?? beatcodeId;
         const wrappedCode = language === "cpp"
           ? buildWrappedCpp(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes)
           : language === "python"
-          ? buildWrappedPython(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes)
-          : buildWrappedJavascript(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes);
+          ? buildWrappedPython(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes, perTestBeatcodeId)
+          : buildWrappedJavascript(code, functionName, test.args, Array.isArray(test.argTypes) ? test.argTypes : argTypes, perTestBeatcodeId);
 
         const result = await executeSubmission({
           language,
