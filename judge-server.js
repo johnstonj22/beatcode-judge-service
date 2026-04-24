@@ -282,15 +282,54 @@ function isLikelyObjectLiteral(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function serializeCppLiteral(value) {
+function unwrapVectorType(typeHint) {
+  const t = String(typeHint || "").trim();
+  const m = t.match(/^vector\s*<\s*(.+)\s*>$/);
+  return m ? m[1].trim() : "";
+}
+
+function escapeCppChar(ch) {
+  if (ch === "\\") return "\\\\";
+  if (ch === "'") return "\\'";
+  if (ch === "\n") return "\\n";
+  if (ch === "\r") return "\\r";
+  if (ch === "\t") return "\\t";
+  return ch;
+}
+
+function serializeCppCharLiteral(value) {
+  let s = "";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    s = String(Math.trunc(value));
+  } else if (typeof value === "string") {
+    s = value;
+  } else if (typeof value === "boolean") {
+    s = value ? "1" : "0";
+  } else if (value === null || value === undefined) {
+    s = "\0";
+  } else {
+    s = String(value);
+  }
+
+  if (s.length === 0) s = "\0";
+  const ch = s[0];
+  return `'${escapeCppChar(ch)}'`;
+}
+
+function serializeCppLiteral(value, typeHint = "") {
+  const hinted = String(typeHint || "").replace(/\s+/g, " ").trim();
+  const isCharHint = /\bchar\b/.test(hinted) && !/\bstring\b/.test(hinted);
+
   if (Array.isArray(value)) {
-    const rendered = value.map((item) => serializeCppLiteral(item)).join(", ");
+    const innerType = unwrapVectorType(hinted);
+    const rendered = value.map((item) => serializeCppLiteral(item, innerType)).join(", ");
     return `{${rendered}}`;
   }
 
   if (value === null || value === undefined) return "0";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return `${value}`;
+  if (isCharHint) return serializeCppCharLiteral(value);
   if (typeof value === "string") return JSON.stringify(value);
 
   if (isLikelyObjectLiteral(value)) {
@@ -361,7 +400,7 @@ function buildWrappedCpp(code, functionName, args, argTypes) {
     }
 
     const type = normalizedHint || inferCppArgType(arg);
-    return `${type} __arg${idx} = ${serializeCppLiteral(arg)};`;
+    return `${type} __arg${idx} = ${serializeCppLiteral(arg, type)};`;
   });
   const callSignatureArgs = isHasCycle
     ? "__arg0"
