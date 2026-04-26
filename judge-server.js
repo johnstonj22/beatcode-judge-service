@@ -103,6 +103,15 @@ function preprocessPythonCodeForJudge(code, functionName) {
     return line.startsWith(" ".repeat(methodIndent)) ? line.slice(methodIndent) : line;
   });
 
+  // Preserve top-level imports that are often required by method bodies
+  // (e.g., `import heapq` for mergeKLists).
+  const topLevelImports = lines
+    .filter((line) => {
+      const indent = (line.match(/^(\s*)/) || [""])[1].length;
+      return indent === 0 && /^\s*(import\s+.+|from\s+.+\s+import\s+.+)\s*$/.test(line);
+    })
+    .map((line) => line.trim());
+
   const merged = dedented.join("\n");
   const noSelf = merged.replace(
     new RegExp(`def\\s+${functionName}\\s*\\(\\s*(?:self|cls)\\s*(?:,\\s*)?`),
@@ -112,8 +121,9 @@ function preprocessPythonCodeForJudge(code, functionName) {
     new RegExp(`\\b(?:self|cls)\\.${functionName}\\s*\\(`, "g"),
     `${functionName}(`
   );
-
-  return recursionFixed.trim();
+  const body = recursionFixed.trim();
+  if (topLevelImports.length === 0) return body;
+  return `${topLevelImports.join("\n")}\n${body}`.trim();
 }
 
 function shouldUseLinkedListHarness(code, functionName, argTypes, beatcodeId) {
