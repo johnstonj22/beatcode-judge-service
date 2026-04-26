@@ -82,26 +82,54 @@ function preprocessPythonCodeForJudge(code, functionName) {
   const lines = normalized.split("\n");
   const methodLineIndex = lines.findIndex((line) => new RegExp(`^\\s*def\\s+${functionName}\\s*\\(`).test(line));
   if (methodLineIndex === -1) return normalized;
-
   const methodIndent = (lines[methodLineIndex].match(/^(\s*)/) || [""])[1].length;
-  const methodLines = [];
 
-  for (let i = methodLineIndex; i < lines.length; i++) {
-    const current = lines[i];
-    const isBlank = current.trim() === "";
-    const indent = (current.match(/^(\s*)/) || [""])[1].length;
-
-    if (i > methodLineIndex && !isBlank && indent <= methodIndent && /^\s*(def|class)/.test(current)) {
+  // If the target function is inside a class, flatten the whole class body so
+  // helper methods (e.g. self.getKth) are still available at top-level.
+  let merged = "";
+  let classLineIndex = -1;
+  let classIndent = -1;
+  for (let i = methodLineIndex; i >= 0; i -= 1) {
+    const m = lines[i].match(/^(\s*)class\s+[A-Za-z_][A-Za-z0-9_]*\b.*:\s*$/);
+    if (!m) continue;
+    const indent = (m[1] || "").length;
+    if (indent < methodIndent) {
+      classLineIndex = i;
+      classIndent = indent;
       break;
     }
-
-    methodLines.push(current);
   }
 
-  const dedented = methodLines.map((line) => {
-    if (!line.trim()) return "";
-    return line.startsWith(" ".repeat(methodIndent)) ? line.slice(methodIndent) : line;
-  });
+  if (classLineIndex !== -1) {
+    const bodyIndent = classIndent + 4;
+    const classBodyLines = [];
+    for (let i = classLineIndex + 1; i < lines.length; i += 1) {
+      const current = lines[i];
+      const isBlank = current.trim() === "";
+      const indent = (current.match(/^(\s*)/) || [""])[1].length;
+      if (!isBlank && indent <= classIndent) break;
+      classBodyLines.push(current);
+    }
+    const dedented = classBodyLines.map((line) => {
+      if (!line.trim()) return "";
+      return line.startsWith(" ".repeat(bodyIndent)) ? line.slice(bodyIndent) : line;
+    });
+    merged = dedented.join("\n");
+  } else {
+    const methodLines = [];
+    for (let i = methodLineIndex; i < lines.length; i++) {
+      const current = lines[i];
+      const isBlank = current.trim() === "";
+      const indent = (current.match(/^(\s*)/) || [""])[1].length;
+      if (i > methodLineIndex && !isBlank && indent <= methodIndent && /^\s*(def|class)/.test(current)) break;
+      methodLines.push(current);
+    }
+    const dedented = methodLines.map((line) => {
+      if (!line.trim()) return "";
+      return line.startsWith(" ".repeat(methodIndent)) ? line.slice(methodIndent) : line;
+    });
+    merged = dedented.join("\n");
+  }
 
   // Preserve top-level imports that are often required by method bodies
   // (e.g., `import heapq` for mergeKLists).
@@ -112,16 +140,9 @@ function preprocessPythonCodeForJudge(code, functionName) {
     })
     .map((line) => line.trim());
 
-  const merged = dedented.join("\n");
-  const noSelf = merged.replace(
-    new RegExp(`def\\s+${functionName}\\s*\\(\\s*(?:self|cls)\\s*(?:,\\s*)?`),
-    `def ${functionName}(`
-  );
-  const recursionFixed = noSelf.replace(
-    new RegExp(`\\b(?:self|cls)\\.${functionName}\\s*\\(`, "g"),
-    `${functionName}(`
-  );
-  const body = recursionFixed.trim();
+  const noSelf = merged.replace(/def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(?:self|cls)\s*(?:,\s*)?/g, "def $1(");
+  const memberCallsFixed = noSelf.replace(/\b(?:self|cls)\./g, "");
+  const body = memberCallsFixed.trim();
   if (topLevelImports.length === 0) return body;
   return `${topLevelImports.join("\n")}\n${body}`.trim();
 }
